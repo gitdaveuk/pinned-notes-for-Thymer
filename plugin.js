@@ -2,10 +2,11 @@
 // Adds "Pin note" / "Unpin note" to the command palette (Ctrl+P)
 // and shows pinned notes as a sidebar widget.
 
-const STORAGE_KEY = "pinned-notes-v1";
+const STORAGE_KEY_PREFIX = "pinned-notes-v1";
 
 class Plugin extends AppPlugin {
     onLoad() {
+        this._storageKey = `${STORAGE_KEY_PREFIX}-${this.getWorkspaceGuid()}`;
         this._pinned = this._loadPinned();
         this._sidebarWidget = null;
         this._pinCmd = null;
@@ -68,8 +69,8 @@ class Plugin extends AppPlugin {
 
     _loadPinned() {
         try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            return raw ? JSON.parse(raw) : []; // [{guid, name}]
+            const raw = localStorage.getItem(this._storageKey);
+            return raw ? JSON.parse(raw) : [];
         } catch {
             return [];
         }
@@ -77,7 +78,7 @@ class Plugin extends AppPlugin {
 
     _savePinned() {
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(this._pinned));
+            localStorage.setItem(this._storageKey, JSON.stringify(this._pinned));
         } catch {}
     }
 
