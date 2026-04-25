@@ -34,8 +34,8 @@ class Plugin extends AppPlugin {
             .pn-item-remove:hover { opacity: 1 !important; background: var(--color-hover, rgba(128,128,128,0.18)); }
             .pn-header {
                 display: flex; align-items: center; justify-content: space-between;
-                padding: 2px 0 4px; opacity: 0.45; font-size: 11px;
-                text-transform: uppercase; letter-spacing: 0.05em;
+                padding: 2px 0 4px; opacity: 0.45; font-size: 14px;
+                font-weight: bold;
             }
         `);
 
