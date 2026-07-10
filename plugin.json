@@ -1,21 +1,27 @@
 {
-  "ver": 1,
-  "name": "Pinned Notes",
-  "icon": "pin",
-  "description": "Pin any note to the sidebar via the command palette (Ctrl+P → Pin note).",
-  "item_name": "Pin",
-  "show_sidebar_items": false,
-  "show_cmdpal_items": true,
-  "home": false,
-  "fields": [],
-  "views": [],
-  "page_field_ids": [],
-  "sidebar_record_sort_field_id": "",
-  "sidebar_record_sort_dir": "asc",
-  "managed": {
-    "fields": true,
-    "views": true,
-    "sidebar": true
-  },
-  "custom": {}
+	"ver": 1,
+	"name": "Pinned Notes",
+	"icon": "pin",
+	"off": false,
+	"item_name": "Pinned Note",
+	"description": "Pin the current note to a \"Pinned Notes\" section in the sidebar for quick access. Open the command palette (Ctrl+P) and run \"Pin note\".",
+	"show_sidebar_items": false,
+	"show_cmdpal_items": false,
+	"views": [],
+	"fields": [],
+	"page_field_ids": [],
+	"sidebar_record_sort_field_id": "",
+	"sidebar_record_sort_dir": "asc",
+	"managed": {
+		"fields": false,
+		"views": false,
+		"sidebar": false
+	},
+	"custom": {
+		"pinnedNotes": [
+			"1A2GTJZA1703GS1MPZ1CWX8HVC",
+			"1CG3B318FXHZQKAXTWND3ABY2B"
+		]
+	},
+	"home": false
 }
