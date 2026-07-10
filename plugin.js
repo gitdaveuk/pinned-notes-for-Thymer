@@ -1,209 +1,238 @@
-// Pinned Notes Plugin
-// Adds "Pin note" / "Unpin note" to the command palette (Ctrl+P)
-// and shows pinned notes as a sidebar widget.
-
-const STORAGE_KEY_PREFIX = "pinned-notes-v1";
-
 class Plugin extends AppPlugin {
-    onLoad() {
-        this._storageKey = `${STORAGE_KEY_PREFIX}-${this.getWorkspaceGuid()}`;
-        this._pinned = this._loadPinned();
-        this._sidebarWidget = null;
-        this._pinCmd = null;
-        this._unpinCmd = null;
 
-        // Inject styles
+    onLoad() {
+        this._sidebarWidget = null;
+        this._paletteCommand = null;
+        this._recordUpdatedHandler = null;
+        this._panelFocusedHandler = null;
+
         this.ui.injectCSS(`
-            .pn-widget { padding: 4px 0; }
-            .pn-empty { opacity: 0.45; font-size: 12px; font-style: italic; }
-            .pn-item {
-                display: flex; align-items: center; gap: 6px;
-                padding: 5px 0; cursor: pointer; border-radius: 4px;
-                font-size: 13px; line-height: 1.3;
-                transition: background 0.1s;
+            .pinned-notes-widget {
+                padding: 4px 8px 10px 8px;
             }
-            .pn-item:hover { background: var(--color-hover, rgba(128,128,128,0.12)); }
-            .pn-item-icon { opacity: 0.6; flex-shrink: 0; font-size: 13px; }
-            .pn-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            .pn-item-remove {
-                opacity: 0; cursor: pointer; padding: 2px 4px; border-radius: 3px;
-                font-size: 11px; flex-shrink: 0; line-height: 1;
-                transition: opacity 0.15s, background 0.1s;
+            .pinned-notes-widget__header {
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                opacity: 0.55;
+                padding: 4px 4px 6px 4px;
             }
-            .pn-item:hover .pn-item-remove { opacity: 0.45; }
-            .pn-item-remove:hover { opacity: 1 !important; background: var(--color-hover, rgba(128,128,128,0.18)); }
-            .pn-header {
-                display: flex; align-items: center; justify-content: space-between;
-                padding: 2px 0 4px; opacity: 0.45; font-size: 14px;
-                font-weight: bold;
+            .pinned-notes-widget__empty {
+                font-size: 12px;
+                opacity: 0.5;
+                padding: 2px 4px 6px 4px;
+                line-height: 1.4;
+            }
+            .pinned-notes-widget__item {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 4px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 13px;
+            }
+            .pinned-notes-widget__item:hover {
+                background: rgba(127, 127, 127, 0.12);
+            }
+            .pinned-notes-widget__item-title {
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .pinned-notes-widget__unpin {
+                opacity: 0;
+                cursor: pointer;
+                width: 16px;
+                height: 16px;
+                line-height: 16px;
+                text-align: center;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            .pinned-notes-widget__item:hover .pinned-notes-widget__unpin {
+                opacity: 0.5;
+            }
+            .pinned-notes-widget__unpin:hover {
+                opacity: 1 !important;
+                background: rgba(127, 127, 127, 0.2);
             }
         `);
 
-        // Sidebar widget showing pinned notes
-        this._sidebarWidget = this.ui.addSidebarWidget((container, { refresh }) => {
-            this._renderWidget(container);
-        });
-
-        // Command palette: Pin note
-        this._pinCmd = this.ui.addCommandPaletteCommand({
+        // Registers "Pin note" in the command palette (Ctrl+P)
+        this._paletteCommand = this.ui.addCommandPaletteCommand({
             label: "Pin note",
             icon: "pin",
-            onSelected: () => this._pinActive(),
+            onSelected: () => this.pinActiveNote(),
         });
 
-        // Command palette: Unpin note
-        this._unpinCmd = this.ui.addCommandPaletteCommand({
-            label: "Unpin note",
-            icon: "pin",
-            onSelected: () => this._unpinActive(),
+        // Renders the "Pinned Notes" section above the collections in the sidebar
+        this._sidebarWidget = this.ui.addSidebarWidget((container) => {
+            this.renderSidebar(container);
+        });
+
+        // Keep titles/icons fresh when records change or when switching notes
+        this._recordUpdatedHandler = this.events.on("record.updated", () => {
+            this.refreshSidebar();
+        }, { collection: "*" });
+
+        this._panelFocusedHandler = this.events.on("panel.focused", () => {
+            this.refreshSidebar();
         });
     }
 
     onUnload() {
-        this._sidebarWidget?.remove();
-        this._pinCmd?.remove();
-        this._unpinCmd?.remove();
+        if (this._paletteCommand) this._paletteCommand.remove();
+        if (this._sidebarWidget) this._sidebarWidget.remove();
+        if (this._recordUpdatedHandler) this.events.off(this._recordUpdatedHandler);
+        if (this._panelFocusedHandler) this.events.off(this._panelFocusedHandler);
     }
 
-    // ── Storage ──────────────────────────────────────────────────────────────
-
-    _loadPinned() {
-        try {
-            const raw = localStorage.getItem(this._storageKey);
-            return raw ? JSON.parse(raw) : [];
-        } catch {
-            return [];
-        }
+    getPinnedGuids() {
+        const conf = this.getConfiguration();
+        return (conf.custom && Array.isArray(conf.custom.pinnedNotes)) ? conf.custom.pinnedNotes : [];
     }
 
-    _savePinned() {
-        try {
-            localStorage.setItem(this._storageKey, JSON.stringify(this._pinned));
-        } catch {}
+    async savePinnedGuids(guids) {
+        const conf = this.getConfiguration();
+        conf.custom = conf.custom || {};
+        conf.custom.pinnedNotes = guids;
+
+        // Get the control API for this plugin itself so we can persist config changes
+        const selfApi = this.data.getPluginByGuid(this.getGuid());
+        if (!selfApi) return false;
+        return await selfApi.saveConfiguration(conf);
     }
 
-    // ── Pin / Unpin ──────────────────────────────────────────────────────────
-
-    _pinActive() {
+    pinActiveNote() {
         const panel = this.ui.getActivePanel();
-        const record = panel?.getActiveRecord();
+        const record = panel ? panel.getActiveRecord() : null;
+
         if (!record) {
-            this.ui.addToaster({ title: "No note open", message: "Open a note first, then pin it.", dismissible: true, autoDestroyTime: 2500 });
+            this.ui.addToaster({
+                title: "No note open",
+                message: "Open a note first, then run \"Pin note\" again.",
+                dismissible: true,
+                autoDestroyTime: 3000,
+            });
             return;
         }
+
         const guid = record.guid;
-        if (this._pinned.some(p => p.guid === guid)) {
-            this.ui.addToaster({ title: "Already pinned", message: `"${record.getName()}" is already pinned.`, dismissible: true, autoDestroyTime: 2000 });
+        const guids = this.getPinnedGuids();
+
+        if (guids.includes(guid)) {
+            this.ui.addToaster({
+                title: "Already pinned",
+                message: `"${record.getName()}" is already in Pinned Notes.`,
+                dismissible: true,
+                autoDestroyTime: 2500,
+            });
             return;
         }
-        this._pinned.unshift({ guid, name: record.getName() });
-        this._savePinned();
-        this._refreshWidget();
-        this.ui.addToaster({ title: "Pinned!", message: `"${record.getName()}" added to pinned notes.`, dismissible: true, autoDestroyTime: 2000 });
+
+        const newGuids = [...guids, guid];
+        this.savePinnedGuids(newGuids).then((ok) => {
+            if (!ok) return;
+            this.refreshSidebar();
+            this.ui.addToaster({
+                title: "Pinned",
+                message: `"${record.getName()}" was added to Pinned Notes.`,
+                dismissible: true,
+                autoDestroyTime: 2000,
+            });
+        });
     }
 
-    _unpinActive() {
-        const panel = this.ui.getActivePanel();
-        const record = panel?.getActiveRecord();
-        if (!record) {
-            this.ui.addToaster({ title: "No note open", message: "Open a note first, then unpin it.", dismissible: true, autoDestroyTime: 2500 });
-            return;
+    unpinNote(guid) {
+        const newGuids = this.getPinnedGuids().filter((g) => g !== guid);
+        this.savePinnedGuids(newGuids).then((ok) => {
+            if (ok) this.refreshSidebar();
+        });
+    }
+
+    refreshSidebar() {
+        if (this._sidebarWidget) this._sidebarWidget.refresh();
+    }
+
+    async openRecord(guid) {
+        let panel = this.ui.getActivePanel();
+        if (!panel) {
+            panel = await this.ui.createPanel();
         }
-        const guid = record.guid;
-        const before = this._pinned.length;
-        this._pinned = this._pinned.filter(p => p.guid !== guid);
-        if (this._pinned.length === before) {
-            this.ui.addToaster({ title: "Not pinned", message: `"${record.getName()}" isn't pinned.`, dismissible: true, autoDestroyTime: 2000 });
-            return;
+        if (!panel) return;
+
+        // itemGuid-based navigation resolves the document root and workspace for us
+        const ok = await panel.navigateTo({ itemGuid: guid, highlight: false });
+        if (ok === false) {
+            this.ui.addToaster({
+                title: "Couldn't open note",
+                message: "It may have been deleted or moved.",
+                dismissible: true,
+                autoDestroyTime: 3000,
+            });
+        } else {
+            this.ui.setActivePanel(panel);
         }
-        this._savePinned();
-        this._refreshWidget();
-        this.ui.addToaster({ title: "Unpinned", message: `"${record.getName()}" removed from pinned notes.`, dismissible: true, autoDestroyTime: 2000 });
     }
 
-    _unpin(guid) {
-        this._pinned = this._pinned.filter(p => p.guid !== guid);
-        this._savePinned();
-        this._refreshWidget();
-    }
-
-    // ── Sidebar widget ────────────────────────────────────────────────────────
-
-    _refreshWidget() {
-        this._sidebarWidget?.refresh();
-    }
-
-    _renderWidget(container) {
+    renderSidebar(container) {
         container.innerHTML = "";
+
         const wrap = document.createElement("div");
-        wrap.className = "pn-widget";
+        wrap.className = "pinned-notes-widget";
 
         const header = document.createElement("div");
-        header.className = "pn-header";
-        header.textContent = "📌 Pinned";
+        header.className = "pinned-notes-widget__header";
+        header.textContent = "Pinned Notes";
         wrap.appendChild(header);
 
-        if (this._pinned.length === 0) {
+        const guids = this.getPinnedGuids();
+        const validGuids = [];
+
+        if (guids.length === 0) {
             const empty = document.createElement("div");
-            empty.className = "pn-empty";
-            empty.textContent = "No pinned notes yet";
+            empty.className = "pinned-notes-widget__empty";
+            empty.textContent = 'Ctrl+P \u2192 "Pin note" to pin your first note';
             wrap.appendChild(empty);
         } else {
-            // Update names in case records were renamed
-            for (const pin of this._pinned) {
-                const record = this.data.getRecord(pin.guid);
-                if (record) pin.name = record.getName();
-            }
+            for (const guid of guids) {
+                const record = this.data.getRecord(guid);
+                if (!record) continue; // note was permanently deleted
+                validGuids.push(guid);
 
-            for (const pin of this._pinned) {
                 const item = document.createElement("div");
-                item.className = "pn-item";
+                item.className = "pinned-notes-widget__item";
+                item.title = record.getName() || "Untitled";
 
-                const icon = document.createElement("span");
-                icon.className = "pn-item-icon";
-                icon.textContent = "📄";
+                const icon = this.ui.createIcon(record.getIcon(true) || "file-text");
                 item.appendChild(icon);
 
-                const label = document.createElement("span");
-                label.className = "pn-item-label";
-                label.textContent = pin.name || "(Untitled)";
-                item.appendChild(label);
+                const title = document.createElement("div");
+                title.className = "pinned-notes-widget__item-title";
+                title.textContent = record.getName() || "Untitled";
+                item.appendChild(title);
 
-                const remove = document.createElement("span");
-                remove.className = "pn-item-remove";
-                remove.textContent = "✕";
-                remove.title = "Unpin";
-                remove.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    this._unpin(pin.guid);
+                const unpin = document.createElement("div");
+                unpin.className = "pinned-notes-widget__unpin";
+                unpin.textContent = "\u00D7";
+                unpin.title = "Unpin";
+                unpin.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    this.unpinNote(guid);
                 });
-                item.appendChild(remove);
+                item.appendChild(unpin);
 
-                item.addEventListener("click", async (e) => {
-                    if (e.ctrlKey || e.metaKey) {
-                        const activePanel = this.ui.getActivePanel();
-                        const newPanel = await this.ui.createPanel({ afterPanel: activePanel ?? undefined });
-                        if (newPanel) {
-                            newPanel.navigateTo({
-                                type: "edit_panel",
-                                rootId: pin.guid,
-                                workspaceGuid: this.getWorkspaceGuid(),
-                            });
-                            this.ui.setActivePanel(newPanel);
-                        }
-                    } else {
-                        const panel = this.ui.getActivePanel();
-                        if (panel) {
-                            panel.navigateTo({
-                                type: "edit_panel",
-                                rootId: pin.guid,
-                                workspaceGuid: this.getWorkspaceGuid(),
-                            });
-                        }
-                    }
-                });
+                item.addEventListener("click", () => this.openRecord(guid));
 
                 wrap.appendChild(item);
+            }
+
+            // If any pinned guids no longer resolve to a record, drop them silently
+            if (validGuids.length !== guids.length) {
+                this.savePinnedGuids(validGuids);
             }
         }
 
